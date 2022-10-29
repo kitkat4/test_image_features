@@ -1,6 +1,8 @@
 #include <opencv2/opencv.hpp>
 #include <eigen3/Eigen/Core>
 
+#include <harris_corner.hpp>
+
 #include "my_utils_kk4.hpp"
 
 #include <stdexcept>
@@ -9,104 +11,6 @@
 #include <iostream>
 
 static int nms_window_size_ = 1;
-
-bool nonMaximumSuppressionCheckRow(const float val,
-                                   float const * const row_head_pointer,
-                                   const int window_center_col_idx,
-                                   const int window_min,
-                                   const int window_max,
-                                   const int img_cols){
-
-    const int i_c = window_center_col_idx;
-
-    bool skip = false;
-
-    for(int j_c = window_min; j_c <= window_max; j_c++){
-
-        if(i_c + j_c < 0){
-            continue;
-        }else if(i_c + j_c >= img_cols){
-            continue;
-        }
-
-        float neigh_val = *(row_head_pointer + i_c + j_c);
-
-        if(val < neigh_val){
-            skip = true;
-            break;
-        }
-    }
-
-    return skip;
-}
-
-void nonMaximumSuppression(const cv::Mat& img_response,
-                           cv::Mat& img_binary_result,
-                           const double thresh,
-                           const int window_size){
-
-    if(img_response.type() != CV_32FC1){
-        throw std::runtime_error("Invalid matrix type");
-    }
-
-    if(window_size % 2 == 0){
-        throw std::runtime_error("window_size must be an odd number");
-    }
-
-    img_binary_result = cv::Mat::zeros(img_response.size(), CV_8UC1);
-
-    const int window_min = - (window_size - 1) / 2;
-    const int window_max = -window_min;
-
-    for(int i_r = 0; i_r < img_response.rows; i_r++){
-        
-        float const * const row_data = img_response.ptr<float>(i_r);
-        
-        for(int i_c = 0; i_c < img_response.cols; i_c++){
-
-            const float val = *(row_data + i_c);
-            
-            if(val < thresh){
-                continue;
-            }
-
-            bool skip = false;
-
-            // check the current row first
-            skip = nonMaximumSuppressionCheckRow(val, row_data, i_c,
-                                                 window_min, window_max,
-                                                 img_response.cols);
-            
-            if(skip){
-                continue;
-            }
-
-            // check the other rows
-            for(int j_r = window_min; j_r <= window_max; j_r++){
-                
-                if(j_r == 0){
-                    continue;
-                }
-
-                if(nonMaximumSuppressionCheckRow(
-                       val, img_response.ptr<float>(i_r + j_r),
-                       i_c, window_min, window_max, img_response.cols)){
-
-                    skip = true;
-                    break;
-                }
-            }
-
-            if(skip){
-                continue;
-            }
-
-            *(img_binary_result.ptr<uint8_t>(i_r) + i_c) = 255;
-        }
-    }
-
-    return;
-}
 
 
 int main(int argc, char** argv){
@@ -142,6 +46,8 @@ int main(int argc, char** argv){
 
     const std::string window_name = argv[0];
     const std::string window_name_harris_response = "Harris corner response";
+    const std::string window_name_debug = "Debug";
+    
 
     cv::VideoCapture video(camera_id);
 
@@ -155,8 +61,10 @@ int main(int argc, char** argv){
     }
 
     cv::namedWindow(window_name, cv::WINDOW_NORMAL);
+    cv::namedWindow(window_name_debug, cv::WINDOW_NORMAL);
     cv::namedWindow(window_name_harris_response,
                     cv::WINDOW_NORMAL | cv::WINDOW_GUI_EXPANDED);
+    
     cv::createTrackbar("harris_k (<set val> / 100)", window_name_harris_response,
                        &harris_k, 100, nullptr);
     cv::createTrackbar("binarization_thresh (<set val> / 1e6)", window_name_harris_response,
@@ -205,10 +113,18 @@ int main(int argc, char** argv){
                              harris_aperture_size, harris_k / 100.0);
             // cv::threshold(harris_response, harris_response_binary,
             //               binarization_thresh / 10000.0, 255, cv::THRESH_BINARY);
-            nonMaximumSuppression(harris_response, harris_response_binary,
-                                  static_cast<double>(binarization_thresh) / 1e6,
-                                  nms_window_size_ * 2 + 1);
+            HarrisCorner::nonMaximumSuppression(
+                harris_response, harris_response_binary,
+                static_cast<double>(binarization_thresh) / 1e6,
+                nms_window_size_ * 2 + 1
+            );
         }
+
+        cv::Mat grad_x, grad_x_normalized;
+        cv::Sobel(gray_image, grad_x, CV_32F, 1, 0, 3, 1, 0, cv::BORDER_DEFAULT);
+
+        cv::normalize(grad_x, grad_x_normalized, 0.0, 1.0, cv::NORM_MINMAX);
+        cv::imshow(window_name_debug, grad_x_normalized);
 
         cv::imshow(window_name, image);
         cv::imshow(window_name_harris_response, harris_response_binary);
